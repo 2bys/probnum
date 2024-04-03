@@ -144,3 +144,4 @@ cython_debug/
 
 # user-specific
 venv_probnum
+venv_probnum/*
