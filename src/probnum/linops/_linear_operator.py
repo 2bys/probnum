@@ -90,11 +90,12 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
         if not np.issubdtype(self.__dtype, np.number):
             raise TypeError("The dtype of a linear operator must be numeric.")
 
-        if np.issubdtype(self.__dtype, np.complexfloating):
-            raise TypeError("Linear operators do not support complex dtypes.")
+        # if np.issubdtype(self.__dtype, np.complexfloating):
+        #     raise TypeError("Linear operators do not support complex dtypes.")
 
         # Matrix properties
         self._is_symmetric = None
+        self._is_hermitian = None # [ADD] Property for complex matrices
         self._is_lower_triangular = None
         self._is_upper_triangular = None
 
@@ -117,6 +118,7 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
         # Property inference
         if not self.is_square:
             self.is_symmetric = False
+            self.is_hermitian = False # [ADD] Property for complex matrices
 
     @property
     def shape(self) -> Tuple[int, int]:
@@ -440,6 +442,30 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
             raise ValueError("Only square operators can be symmetric.")
 
         self._set_property("symmetric", value)
+
+    @property
+    def is_hermitian(self) -> Optional[bool]:
+        """Whether the `LinearOperator` is Hermitian, i.e., equal to its conjugate transpose.
+        
+        If this is `None`, it is unknown whether the operator is Hermitian or not.
+        Only square operators can be Hermitian.
+        
+        Returns
+        -------
+        bool or None
+            `True` if the operator is Hermitian, `False` if not, or `None` if unknown.
+        """
+        return self._is_hermitian
+
+    @is_hermitian.setter
+    def is_hermitian(self, value: Optional[bool]) -> None:
+        if self.is_symmetric and not np.issubdtype(self.__dtype, np.complexfloating):
+            # Set value to true if matrix is symmetric and real.
+            # [TODO] Not working.  
+            value = True
+        if value is True and not self.is_square:
+            raise ValueError("Only square operators can be Hermitian.")
+        self._set_property("hermitian", value) 
 
     @property
     def is_lower_triangular(self) -> Optional[bool]:
@@ -798,10 +824,17 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
     def cholesky(self, lower: bool = True) -> LinearOperator:
         r"""Computes a Cholesky decomposition of the :class:`LinearOperator`.
 
+        Real case:
         The Cholesky decomposition of a symmetric positive-definite matrix :math:`A \in
         \mathbb{R}^{n \times n}` is given by :math:`A = L L^T`, where the unique
         Cholesky factor :math:`L \in \mathbb{R}^{n \times n}` of :math:`A` is a lower
         triangular matrix with a positive diagonal.
+
+        Complex case:
+        The Cholesky decomposition of a Hermitian positive-definite matrix A ∈ ℂⁿˣⁿ
+        is given by A = L Lᴴ, where the unique Cholesky factor L ∈ ℂⁿˣⁿ of A is a 
+        lower triangular matrix with a positive diagonal. Lᴴ denotes the conjugate
+        transpose of L.
 
         As a side-effect, this method will set the value of :attr:`is_positive_definite`
         to :obj:`True`, if the computation of the Cholesky factorization succeeds.
@@ -813,13 +846,16 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
 
         Parameters
         ----------
-        lower :
+        lower : (Real case)
             If this is set to :obj:`False`, this method computes and returns the
             upper triangular Cholesky factor :math:`U = L^T`, for which :math:`A = U^T
             U`. By default (:obj:`True`), the method computes the lower triangular
             Cholesky factor :math:`L`.
-
-        Returns
+        lower : bool, optional (complex case)
+            If set to `False`, this method computes and returns the upper triangular
+            Cholesky factor U = Lᴴ, for which A = UᴴU. By default (`True`), the method
+            computes the lower triangular Cholesky factor L.
+            Returns
         -------
         cholesky_factor :
             The lower or upper Cholesky factor of the :class:`LinearOperator`, depending
@@ -828,13 +864,22 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
 
         Raises
         ------
+        (Real case)
         numpy.linalg.LinAlgError
             If the :class:`LinearOperator` is not symmetric, i.e. if
             :attr:`is_symmetric` is not set to :obj:`True`.
         numpy.linalg.LinAlgError
             If the :class:`LinearOperator` is not positive definite.
+        (Complex case)
+        numpy.linalg.LinAlgError
+            If the 'LinearOperator' is not Hermitian or not positive definite.
         """
-        if not self.is_symmetric:
+        # if not self.is_hermitian: # Complex case
+        #     raise np.linalg.LinAlgError(
+        #         "The Cholesky decomposition is only defined for Hermitian matrices."
+        #     ) # [TODO] Should be default but breaks real tests.
+
+        if not self.is_symmetric: # Remove in complex case (?)
             raise np.linalg.LinAlgError(
                 "The Cholesky decomposition is only defined for symmetric matrices."
             )
@@ -1002,6 +1047,72 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
 
         return self.T
 
+    def _conjugate_transpose(self) -> "LinearOperator":
+        """
+        Conjugate transpose (Hermitian transpose) of this linear operator.
+        
+        Returns
+        -------
+        conjugate_transpose : LinearOperator
+            Conjugate transpose of this linear operator, which is again
+            a LinearOperator.
+        """
+        # Assuming the existence of a `ConjugateTransposedLinearOperator` class
+        return ConjugateTransposedLinearOperator(self)
+
+    @property
+    def H(self) -> "LinearOperator":
+        """Conjugate transpose (Hermitian transpose) of the linear operator."""
+        if self.is_hermitian:
+            return self
+        
+        # conjugate_transposed = ConjugateTransposedLinearOperator(self)
+
+        conjugate_transposed = self._conjugate_transpose()
+
+        conjugate_transposed.is_upper_triangular = self.is_lower_triangular
+        conjugate_transposed.is_lower_triangular = self.is_upper_triangular
+        conjugate_transposed.is_symmetric = self.is_symmetric
+        conjugate_transposed.is_positive_definite = self.is_positive_definite
+
+        return conjugate_transposed
+        # return ConjugateTransposedLinearOperator(self)
+
+    def conjugate_transpose(self) -> "LinearOperator":
+        """
+        Method version of obtaining the conjugate transpose, equivalent to the .H property.
+
+        Returns
+        -------
+        conjugate_transpose : LinearOperator
+            Conjugate transpose of the linear operator.
+        """
+        return self.H
+    
+    def conj(self) -> "LinearOperator":
+        """
+        Complex conjugation of this linear operator.
+
+        Returns
+        -------
+        conjugated : LinearOperator
+            Complex conjugation of this linear operator, which is again
+            a LinearOperator.
+        """
+        return self.conjugate()
+
+    def conjugate(self) -> "LinearOperator":
+        """
+        Complex conjugation of this linear operator.
+
+        Returns
+        -------
+        conjugated : LinearOperator
+            Complex conjugation of this linear operator, which is again
+            a LinearOperator.
+        """
+        return ConjugatedLinearOperator(self)
+
     def _inverse(self) -> "LinearOperator":
         """Inverse of this linear operator.
 
@@ -1093,6 +1204,44 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
 
     def _symmetrize(self) -> LinearOperator:
         return 0.5 * (self + self.T)
+
+    def hermitianize(self) -> LinearOperator:
+        """
+        Compute or approximate the closest Hermitian LinearOperator in the Frobenius norm.
+
+        For a given square matrix `A`, the closest Hermitian matrix is given by:
+        .. math::
+            \operatorname{herm}(A) := \frac{1}{2} (A + A^H),
+
+        where \(A^H\) denotes the conjugate transpose of `A`.
+
+        Returns
+        -------
+        hermitianized_linop : LinearOperator
+            The closest Hermitian LinearOperator in the Frobenius norm. The resulting
+            LinearOperator will have its `is_hermitian` property set to `True`.
+
+        Raises
+        ------
+        numpy.linalg.LinAlgError
+            If this method is called on a non-square LinearOperator.
+        """
+        if not self.is_square:
+            raise np.linalg.LinAlgError("A non-square operator cannot be hermitianized.")
+
+        if self.is_hermitian:  # Assuming an is_hermitian property exists
+            return self
+
+        linop_herm = self._hermitianize()
+        linop_herm.is_hermitian = True
+
+        return linop_herm
+
+    def _hermitianize(self) -> LinearOperator:
+        """
+        Helper method to perform the actual computation of the hermitianize method.
+        """
+        return 0.5 * (self + self.H)  # Assuming .H is the property for conjugate transpose
 
     ####################################################################################
     # Binary Arithmetic
@@ -1229,6 +1378,7 @@ class LinearOperator(abc.ABC):  # pylint: disable=too-many-instance-attributes
     def __rmatmul__(
         self, other: BinaryOperandType
     ) -> Union["LinearOperator", np.ndarray]:
+        # [TODO] This should maybe be switched to Hermitian.
         if isinstance(other, np.ndarray):
             x = other
 
@@ -1331,7 +1481,7 @@ class LambdaLinearOperator(  # pylint: disable=too-many-instance-attributes
     >>> A @ np.ones(2)
     array([1., 3.])
     """
-
+    # [TODO] Include complex operations.
     def __init__(
         self,
         shape: ShapeLike,
@@ -1492,6 +1642,78 @@ class TransposedLinearOperator(LambdaLinearOperator):
 
     def _cholesky(self, lower: bool = True) -> LinearOperator:
         return super().cholesky(lower)
+    
+class ConjugatedLinearOperator(LambdaLinearOperator):
+    """Complex conjugation of a linear operator."""
+
+    def __init__(self, linop: LinearOperator):
+        self._linop = linop
+
+        # Define a lambda function for matmul that applies conjugation
+        # This operation handles the conjugation of the dense representation.
+        matmul = lambda x: np.conjugate(self._linop._matmul(np.conjugate(x)))
+
+        super().__init__(
+            shape=self._linop.shape,  # Shape remains the same as the original operator
+            dtype=self._linop.dtype,  # Dtype also remains the same
+            matmul=matmul,
+            todense=lambda: np.conjugate(self._linop.todense()),  # Conjugate the dense representation
+            transpose=lambda: ConjugatedLinearOperator(self._linop.T),  # Conjugated transpose
+            inverse=lambda: ConjugatedLinearOperator(self._linop.inv()),  # Conjugated inverse
+            rank=self._linop.rank,  # Rank is invariant under conjugation
+            det=lambda: np.conjugate(self._linop.det()),  # The determinant should be conjugated
+            logabsdet=self._linop.logabsdet,  # Log of the absolute determinant is invariant
+            trace=lambda: np.conjugate(self._linop.trace()),  # Trace should be conjugated
+            diagonal=lambda: np.conjugate(self._linop.diagonal()),  # Diagonal elements should be conjugated
+        )
+
+    def __repr__(self) -> str:
+        return f"Conjugated {self._linop}"
+
+class ConjugateTransposedLinearOperator(LambdaLinearOperator):
+    """Conjugate transposition (Hermitian transpose) of a linear operator."""
+
+    def __init__(
+        self,
+        linop: LinearOperator,
+        matmul: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    ):
+        self._linop = linop
+
+        if matmul is None:
+            # The conjugate transpose operation also includes conjugation along with transposition.
+            # This operation handles the conjugation of the dense representation.
+            matmul = lambda x: np.conjugate(self.todense(cache=True).T @ np.conjugate(x))
+
+        super().__init__(
+            shape=(self._linop.shape[1], self._linop.shape[0]),
+            dtype=self._linop.dtype,
+            matmul=matmul,
+            todense=lambda: np.conjugate(self._linop.todense(cache=True).T),
+            transpose=lambda: ConjugateTransposedLinearOperator(self._linop),  # Conjugate transpose of a conjugate transpose returns the original operator
+            inverse=lambda: self._linop.inv().H,  # Assuming .H property/method is implemented for the inverse operation
+            rank=self._linop.rank,  # Rank is invariant under conjugate transpose
+            det=lambda: np.conj(self._linop.det()),  # The determinant should be conjugated
+            logabsdet=self._linop.logabsdet,  # Log of the absolute determinant is invariant under conjugate transpose
+            trace=lambda: np.conj(self._linop.trace()),  # Trace should be conjugated
+            diagonal=lambda: np.conjugate(self._linop.diagonal()),  # Diagonal elements should be conjugated
+        )
+
+    def _astype(
+        self, dtype: np.dtype, order: str, casting: str, copy: bool
+    ) -> "LinearOperator":
+        # Ensure astype handles the conjugation appropriately
+        return self._linop.astype(dtype, order=order, casting=casting, copy=copy).H
+
+    def __repr__(self) -> str:
+        return f"Conjugate transpose of {self._linop}"
+
+    def _cholesky(self, lower: bool = True) -> LinearOperator:
+        # Cholesky decomposition requires the matrix to be positive definite,
+        # which is a stricter condition that does not necessarily apply after conjugation.
+        # Therefore, directly using Cholesky decomposition on the conjugate transposed
+        # operator might not always be valid without additional checks.
+        raise NotImplementedError("Cholesky decomposition is not directly applicable to the conjugate transposed operator without additional checks.")
 
 
 class _InverseLinearOperator(LambdaLinearOperator):
@@ -1515,7 +1737,8 @@ class _InverseLinearOperator(LambdaLinearOperator):
         )
 
         # Matrix properties
-        self.is_symmetric = self._linop.is_symmetric
+        self.is_hermitian = self._linop.is_hermitian
+        #self.is_symmetric = self._linop.is_symmetric
         self.is_positive_definite = self._linop.is_positive_definite
 
     def __repr__(self) -> str:
@@ -1525,7 +1748,7 @@ class _InverseLinearOperator(LambdaLinearOperator):
     def _tmatmul(self, B: ArrayLike) -> np.ndarray:
         assert B.ndim == 2
 
-        if self.is_symmetric:
+        if self.is_hermitian: # changed to general complex case
             if self.is_positive_definite is not False:
                 try:
                     return scipy.linalg.cho_solve(

@@ -453,7 +453,6 @@ def test_inv(linop: pn.linops.LinearOperator, matrix: np.ndarray):
         with pytest.raises(np.linalg.LinAlgError):
             linop.inv().todense()
 
-
 @pytest_cases.parametrize_with_cases("linop,matrix", cases=case_modules)
 def test_symmetrize(linop: pn.linops.LinearOperator, matrix: np.ndarray):
     if linop.is_square:
